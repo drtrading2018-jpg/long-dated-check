@@ -191,7 +191,11 @@ export default function NikkeiDashboard() {
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={chartData} margin={{ top: 6, right: 6, bottom: 0, left: 0 }}>
                     <XAxis dataKey="time" tick={{ fontSize: 9, fill: C.textMuted }} interval="preserveStartEnd" axisLine={{ stroke: C.border }} tickLine={false} />
-                    <YAxis domain={["auto", "auto"]} tick={{ fontSize: 9, fill: C.textMuted }} axisLine={false} tickLine={false} width={48} />
+                    <YAxis
+                      domain={([min, max]) => [Math.floor(min / 500) * 500, Math.ceil(max / 500) * 500]}
+                      ticks={(() => { if (!chartData?.length) return []; const prices = chartData.map(d => d.price).filter(Boolean); const lo = Math.floor(Math.min(...prices) / 500) * 500; const hi = Math.ceil(Math.max(...prices) / 500) * 500; const t = []; for (let v = lo; v <= hi; v += 500) t.push(v); return t; })()}
+                      tick={{ fontSize: 9, fill: C.textMuted }} axisLine={false} tickLine={false} width={52}
+                    />
                     <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, fontSize: 11, borderRadius: 6 }} labelStyle={{ color: C.textSecondary }} />
                     <Line type="monotone" dataKey="price" stroke={chartUp ? C.bullish : C.bearish} strokeWidth={2} dot={false} />
                   </LineChart>
@@ -363,7 +367,11 @@ export default function NikkeiDashboard() {
                     <ResponsiveContainer width="100%" height="100%">
                       <LineChart data={session.candles} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
                         <XAxis dataKey="time" tick={{ fontSize: 8, fill: C.textMuted }} interval="preserveStartEnd" axisLine={{ stroke: C.border }} tickLine={false} />
-                        <YAxis domain={["auto", "auto"]} tick={{ fontSize: 8, fill: C.textMuted }} axisLine={false} tickLine={false} width={44} />
+                        <YAxis
+                          domain={([min, max]) => [Math.floor(min / 500) * 500, Math.ceil(max / 500) * 500]}
+                          ticks={(() => { const prices = session.candles.map(d => d.price).filter(Boolean); if (!prices.length) return []; const lo = Math.floor(Math.min(...prices) / 500) * 500; const hi = Math.ceil(Math.max(...prices) / 500) * 500; const t = []; for (let v = lo; v <= hi; v += 500) t.push(v); return t; })()}
+                          tick={{ fontSize: 8, fill: C.textMuted }} axisLine={false} tickLine={false} width={48}
+                        />
                         <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, fontSize: 10, borderRadius: 6 }} labelStyle={{ color: C.textSecondary }} />
                         <Line type="monotone" dataKey="price" stroke={vColor[session.direction] || C.accent} strokeWidth={2} dot={false} />
                       </LineChart>
