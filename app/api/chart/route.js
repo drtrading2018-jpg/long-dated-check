@@ -27,12 +27,14 @@ export async function GET() {
     }
 
     const points = prices
-      .map(p => {
-        const mid = (p.closePrice.bid + p.closePrice.ask) / 2;
-        const d = parseIGTime(p.snapshotTime);
-        return { time: toBSTLabel(d), price: Math.round(mid * 10) / 10 };
-      })
-      .filter(p => p.price);
+      const points = prices
+  .map(p => {
+    const mid = (p.closePrice.bid + p.closePrice.ask) / 2;
+    const d = parseIGTime(p.snapshotTime);
+    if (!d) return null;
+    return { time: toBSTLabel(d), price: Math.round(mid * 10) / 10 };
+  })
+  .filter(p => p && p.price);
 
     return Response.json({ points });
   } catch (err) {
