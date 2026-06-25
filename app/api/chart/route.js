@@ -4,8 +4,29 @@ export async function GET() {
   try {
     const { cst, token, baseUrl, apiKey } = await getIGSession();
 
-    // Last 20 candles at 30-min = covers ~10 hours
-    const res = await fetch(`${baseUrl}/prices/${NIKKEI_EPIC}/MINUTE_30/20`, {
+    // Build date range: midnight BST (23:00 UTC previous day) to 6am BST (05:00 UTC)
+    // Always shows the most recent completed or in-progress Tokyo session
+    const now = new Date();
+
+    // Find the most recent 23:00 UTC (midnight BST)
+    const sessionStart = new Date(now);
+    sessionStart.setUTCHours(23, 0, 0, 0);
+    // If current UTC time is before 23:00, step back one day
+    if (now.getUTCHours() < 23) {
+      sessionStart.setUTCDate(sessionStart.getUTCDate() - 1);
+    }
+
+    // Session end: 05:00 UTC (6am BST)
+    const sessionEnd = new Date(sessionStart);
+    sessionEnd.setUTCDate(sessionEnd.getUTCDate() + 1);
+    sessionEnd.setUTCHours(5, 0, 0, 0);
+
+    // Format dates for IG API: "YYYY-MM-DDTHH:mm:ss"
+    const fmt = (d) => d.toISOString().slice(0, 19);
+
+    const url = `${baseUrl}/prices/${NIKKEI_EPIC}/MINUTE_30?startdate=${encodeURIComponent(fmt(sessionStart))}&enddate=${encodeURIComponent(fmt(sessionEnd))}`;
+
+    const res = await fetch(url, {
       headers: {
         "X-IG-API-KEY": apiKey,
         "CST": cst,
@@ -24,7 +45,7 @@ export async function GET() {
     const prices = data.prices || [];
 
     if (prices.length === 0) {
-      return Response.json({ error: "No price data returned from IG" }, { status: 502 });
+      return Response.json({ error: "No price data for this session window yet — market may not have opened" }, { status: 502 });
     }
 
     const points = prices
