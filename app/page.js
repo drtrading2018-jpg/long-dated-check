@@ -56,6 +56,32 @@ export default function NikkeiDashboard() {
     try { localStorage.setItem(HISTORY_SIGNALS_KEY, JSON.stringify(updated)); } catch (_) {}
   }
 
+  const [tradeLog, setTradeLog] = useState([]);
+  const [tradeLogLoading, setTradeLogLoading] = useState(false);
+  const [manualTradeResult, setManualTradeResult] = useState(null);
+  const [manualTrading, setManualTrading] = useState(false);
+
+  async function loadTradeLog() {
+    setTradeLogLoading(true);
+    try {
+      const res = await fetch("/api/trade-log");
+      const data = await res.json();
+      if (data.trades) setTradeLog(data.trades);
+    } catch (_) {}
+    finally { setTradeLogLoading(false); }
+  }
+
+  async function triggerManualTrade() {
+    setManualTrading(true); setManualTradeResult(null);
+    try {
+      const res = await fetch("/api/trade", { headers: { "x-manual-trigger": "true" } });
+      const data = await res.json();
+      setManualTradeResult(data);
+      loadTradeLog();
+    } catch (err) { setManualTradeResult({ error: err.message }); }
+    finally { setManualTrading(false); }
+  }
+
   async function loadChart() {
     setChartLoading(true); setChartError(null);
     try {
@@ -76,6 +102,19 @@ export default function NikkeiDashboard() {
       setAnalysis(data);
       const updated = [{ ...data, outcome: null }, ...history].slice(0, 90);
       setHistory(updated); persistHistory(updated);
+      // Save verdict server-side for cron job
+      try {
+        await fetch("/api/verdict-store", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            verdict: data.verdict,
+            confidence: data.confidence,
+            reasoning: data.reasoning,
+            timestamp: data.timestamp,
+          }),
+        });
+      } catch (_) {} // Non-fatal if KV save fails
     } catch (err) { setError("Analysis failed — " + err.message); }
     finally { setLoading(false); }
   }
@@ -175,6 +214,9 @@ export default function NikkeiDashboard() {
           <button style={s.tab(tab === "dashboard")} onClick={() => setTab("dashboard")}>Dashboard</button>
           <button style={s.tab(tab === "history")} onClick={() => { setTab("history"); if (sessions.length === 0) loadSessions(); }}>
             30-Day History
+          </button>
+          <button style={s.tab(tab === "trades")} onClick={() => { setTab("trades"); loadTradeLog(); }}>
+            Trade Log
           </button>
         </div>
       </div>
@@ -407,6 +449,108 @@ export default function NikkeiDashboard() {
               <button style={{ ...s.histBtn, marginTop: 4 }} onClick={loadSessions}>↻ Refresh data</button>
             </>
           )}
+        </div>
+      )}
+      {/* ── TRADE LOG TAB ── */}
+      {tab === "trades" && (
+        <div style={s.body}>
+          {/* Manual trigger */}
+          <div style={{ ...s.card, marginBottom: 16 }}>
+            <p style={s.label}>Manual Trade Trigger</p>
+            <p style={{ fontSize: 12, color: C.textSecondary, marginBottom: 10 }}>
+              Test the trade logic now using the stored verdict. Same conditions as the 1:30am cron job.
+            </p>
+            <button
+              style={{ ...s.saveBtn, fontSize: 13, padding: "10px 20px", opacity: manualTrading ? 0.5 : 1 }}
+              onClick={triggerManualTrade}
+              disabled={manualTrading}
+            >
+              {manualTrading ? "Running..." : "Run Trade Logic Now"}
+            </button>
+
+            {manualTradeResult && (
+              <div style={{ marginTop: 12 }}>
+                {manualTradeResult.error && (
+                  <p style={{ fontSize: 12, color: C.bearish }}>{manualTradeResult.error}</p>
+                )}
+                {manualTradeResult.skipped && (
+                  <div>
+                    <p style={{ fontSize: 12, color: C.uncertain, fontWeight: 600 }}>⊘ Trade skipped</p>
+                    <p style={{ fontSize: 12, color: C.textSecondary, marginTop: 4 }}>{manualTradeResult.reason}</p>
+                  </div>
+                )}
+                {manualTradeResult.traded && (
+                  <div>
+                    <p style={{ fontSize: 12, color: C.bullish, fontWeight: 600 }}>✓ Trade placed — {manualTradeResult.direction}</p>
+                    <p style={{ fontSize: 12, color: C.textSecondary, marginTop: 4 }}>
+                      Entry: {manualTradeResult.confirm?.level} · Stop: {manualTradeResult.confirm?.stopLevel} · Limit: {manualTradeResult.confirm?.limitLevel}
+                    </p>
+                  </div>
+                )}
+                {manualTradeResult.log && (
+                  <div style={{ marginTop: 8, padding: 10, background: C.bg, borderRadius: 6 }}>
+                    {manualTradeResult.log.map((l, i) => (
+                      <p key={i} style={{ fontSize: 11, color: C.textMuted, fontFamily: "monospace", margin: "2px 0" }}>› {l}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Cron schedule info */}
+          <div style={{ ...s.card, marginBottom: 16 }}>
+            <p style={s.label}>Automated Schedule</p>
+            <p style={{ fontSize: 12, color: C.textSecondary, lineHeight: 1.6 }}>
+              The trade logic runs automatically every night at <span style={{ color: C.textPrimary, fontWeight: 600 }}>1:30am BST</span> via Vercel cron job — no computer needed. It checks:
+            </p>
+            <div style={{ marginTop: 8 }}>
+              {["Verdict is bullish or bearish (not uncertain)", "1am→1:30am candle confirms direction", "Price is above/below EMA20"].map((c, i) => (
+                <div key={i} style={{ display: "flex", gap: 8, padding: "4px 0" }}>
+                  <span style={{ color: C.accent }}>›</span>
+                  <span style={{ fontSize: 12, color: C.textSecondary }}>{c}</span>
+                </div>
+              ))}
+            </div>
+            <p style={{ fontSize: 11, color: C.textMuted, marginTop: 8 }}>
+              Parameters: £2/point · Stop 200pts · Take profit 500pts
+            </p>
+          </div>
+
+          {/* Trade history */}
+          {tradeLogLoading && <div style={s.spinSm}>Loading trade log…</div>}
+          {!tradeLogLoading && tradeLog.length === 0 && (
+            <div style={s.empty}>
+              <p style={{ fontSize: 14, color: C.textPrimary, marginBottom: 8 }}>No trades yet</p>
+              <p style={{ fontSize: 13, color: C.textSecondary }}>Trades placed by the cron job or manual trigger will appear here.</p>
+            </div>
+          )}
+          {tradeLog.map((t, i) => (
+            <div key={i} style={{ ...s.card, borderLeft: `3px solid ${t.direction === "BUY" ? C.bullish : C.bearish}` }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <span style={{ fontSize: 14, fontWeight: 700, color: t.direction === "BUY" ? C.bullish : C.bearish }}>
+                  {t.direction === "BUY" ? "▲ BUY" : "▼ SELL"}
+                </span>
+                <span style={{ fontSize: 11, color: C.textMuted, fontFamily: "monospace" }}>{fmt(t.timestamp)}</span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+                {[
+                  ["Entry", t.entryLevel],
+                  ["Stop", t.stopLevel],
+                  ["Limit", t.limitLevel],
+                  ["Status", t.status],
+                  ["Verdict", `${t.verdict} (${t.confidence})`],
+                  ["Candle", `${t.candleMove > 0 ? "+" : ""}${t.candleMove} pts`],
+                ].map(([label, val]) => (
+                  <div key={label}>
+                    <span style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.07em" }}>{label} </span>
+                    <span style={{ fontSize: 12, color: C.textPrimary }}>{val}</span>
+                  </div>
+                ))}
+              </div>
+              {t.isManual && <p style={{ fontSize: 10, color: C.textMuted, marginTop: 6 }}>Manual trigger</p>}
+            </div>
+          ))}
         </div>
       )}
     </div>
