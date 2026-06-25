@@ -39,8 +39,10 @@ export async function getIGSession() {
 
 // Parse IG snapshotTime "2026:06:25-10:00:00" into a UTC Date
 export function parseIGTime(snapshotTime) {
+  if (!snapshotTime) return null;
   // Format: "YYYY:MM:DD-HH:mm:ss"
   const [datePart, timePart] = snapshotTime.split("-");
+  if (!datePart || !timePart) return null;
   const [year, month, day] = datePart.split(":");
   const [hour, min, sec] = timePart.split(":");
   return new Date(`${year}-${month}-${day}T${hour}:${min}:${sec || "00"}Z`);
