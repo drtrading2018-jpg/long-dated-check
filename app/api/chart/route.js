@@ -21,8 +21,16 @@ export async function GET() {
     sessionEnd.setUTCDate(sessionEnd.getUTCDate() + 1);
     sessionEnd.setUTCHours(5, 0, 0, 0);
 
-    // Format dates for IG API: "YYYY-MM-DDTHH:mm:ss"
-    const fmt = (d) => d.toISOString().slice(0, 19);
+    // Format dates for IG API: "yyyy:MM:dd-HH:mm:ss"
+    const fmt = (d) => {
+      const y = d.getUTCFullYear();
+      const mo = String(d.getUTCMonth() + 1).padStart(2, "0");
+      const dd = String(d.getUTCDate()).padStart(2, "0");
+      const h = String(d.getUTCHours()).padStart(2, "0");
+      const mi = String(d.getUTCMinutes()).padStart(2, "0");
+      const s = String(d.getUTCSeconds()).padStart(2, "0");
+      return `${y}:${mo}:${dd}-${h}:${mi}:${s}`;
+    };
 
     const url = `${baseUrl}/prices/${NIKKEI_EPIC}/MINUTE_30?startdate=${encodeURIComponent(fmt(sessionStart))}&enddate=${encodeURIComponent(fmt(sessionEnd))}`;
 
