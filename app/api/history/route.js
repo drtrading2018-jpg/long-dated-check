@@ -4,14 +4,14 @@ export async function GET() {
   try {
     const { cst, token, baseUrl, apiKey } = await getIGSession();
 
-    // 500 candles at 30-min covers ~25 trading days (each session ~13 candles)
+    // 500 candles at 30-min covers ~25 trading days
     const res = await fetch(`${baseUrl}/prices/${NIKKEI_EPIC}/MINUTE_30/500`, {
       headers: {
         "X-IG-API-KEY": apiKey,
         "CST": cst,
         "X-SECURITY-TOKEN": token,
         "Accept": "application/json; charset=UTF-8",
-        "Version": "2",
+        "Version": "1",
       },
     });
 
@@ -31,32 +31,41 @@ export async function GET() {
     // Session starts at 23:00 UTC (midnight BST) and runs to ~06:30 UTC
     const bySession = {};
 
-   prices.forEach(p => {
-  const mid = (p.closePrice.bid + p.closePrice.ask) / 2;
-  if (!mid) return;
-  const d = parseIGTime(p.snapshotTime);
-  if (!d) return;
-      const utcHour = d.getUTCHours();
-      const utcMin = d.getUTCMinutes();
+    prices.forEach(p => {
+      try {
+        const bid = p?.closePrice?.bid;
+        const ask = p?.closePrice?.ask;
+        if (bid == null || ask == null) return;
+        const mid = (bid + ask) / 2;
+        if (!mid) return;
 
-      let sessionDate;
-      if (utcHour === 23) {
-        // Midnight BST — label as next UTC day (the actual BST session date)
-        const next = new Date(d.getTime() + 86400000);
-        sessionDate = next.toISOString().slice(0, 10);
-      } else if (utcHour < 7) {
-        sessionDate = d.toISOString().slice(0, 10);
-      } else {
-        return; // Outside Tokyo session hours
+        const d = parseIGTime(p.snapshotTime);
+        if (!d) return;
+
+        const utcHour = d.getUTCHours();
+        const utcMin = d.getUTCMinutes();
+
+        let sessionDate;
+        if (utcHour === 23) {
+          // Midnight BST — label as next UTC day (the actual BST session date)
+          const next = new Date(d.getTime() + 86400000);
+          sessionDate = next.toISOString().slice(0, 10);
+        } else if (utcHour < 7) {
+          sessionDate = d.toISOString().slice(0, 10);
+        } else {
+          return; // Outside Tokyo session hours
+        }
+
+        if (!bySession[sessionDate]) bySession[sessionDate] = [];
+        bySession[sessionDate].push({
+          utcHour,
+          utcMin,
+          close: mid,
+          label: toBSTLabel(d),
+        });
+      } catch (_) {
+        // Skip malformed candles
       }
-
-      if (!bySession[sessionDate]) bySession[sessionDate] = [];
-      bySession[sessionDate].push({
-        utcHour,
-        utcMin,
-        close: mid,
-        label: toBSTLabel(d),
-      });
     });
 
     const sessions = Object.entries(bySession)
@@ -68,11 +77,8 @@ export async function GET() {
           return aVal - bVal;
         });
 
-        // Open = midnight BST (23:00 UTC) or failing that 1am BST (00:00 UTC)
         const openCandle = candles.find(c => c.utcHour === 23 && c.utcMin === 0)
           || candles.find(c => c.utcHour === 0 && c.utcMin === 0);
-
-        // Close = last candle of the session
         const closeCandle = [...candles].reverse().find(c => c.utcHour < 7);
 
         let direction = "uncertain";
@@ -94,7 +100,7 @@ export async function GET() {
         };
       })
       .filter(s => s.openPrice !== null && s.candles.length > 3)
-      .reverse(); // Most recent first
+      .reverse();
 
     return Response.json({ sessions });
   } catch (err) {

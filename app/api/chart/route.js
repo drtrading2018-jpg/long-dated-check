@@ -4,13 +4,14 @@ export async function GET() {
   try {
     const { cst, token, baseUrl, apiKey } = await getIGSession();
 
+    // Last 20 candles at 30-min = covers ~10 hours
     const res = await fetch(`${baseUrl}/prices/${NIKKEI_EPIC}/MINUTE_30/20`, {
       headers: {
         "X-IG-API-KEY": apiKey,
         "CST": cst,
         "X-SECURITY-TOKEN": token,
         "Accept": "application/json; charset=UTF-8",
-        "Version": "2",
+        "Version": "1",
       },
     });
 
@@ -27,14 +28,24 @@ export async function GET() {
     }
 
     const points = prices
-      const points = prices
-  .map(p => {
-    const mid = (p.closePrice.bid + p.closePrice.ask) / 2;
-    const d = parseIGTime(p.snapshotTime);
-    if (!d) return null;
-    return { time: toBSTLabel(d), price: Math.round(mid * 10) / 10 };
-  })
-  .filter(p => p && p.price);
+      .map(p => {
+        try {
+          const bid = p?.closePrice?.bid;
+          const ask = p?.closePrice?.ask;
+          if (bid == null || ask == null) return null;
+          const mid = (bid + ask) / 2;
+          const d = parseIGTime(p.snapshotTime);
+          if (!d) return null;
+          return { time: toBSTLabel(d), price: Math.round(mid * 10) / 10 };
+        } catch (_) {
+          return null;
+        }
+      })
+      .filter(p => p !== null);
+
+    if (points.length === 0) {
+      return Response.json({ error: "All price candles failed to parse" }, { status: 502 });
+    }
 
     return Response.json({ points });
   } catch (err) {

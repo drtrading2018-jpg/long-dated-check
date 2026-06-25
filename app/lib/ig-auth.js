@@ -38,18 +38,29 @@ export async function getIGSession() {
 }
 
 // Parse IG snapshotTime "2026:06:25-10:00:00" into a UTC Date
+// Returns null if the format is unexpected or value is missing
 export function parseIGTime(snapshotTime) {
-  if (!snapshotTime) return null;
-  // Format: "YYYY:MM:DD-HH:mm:ss"
-  const [datePart, timePart] = snapshotTime.split("-");
-  if (!datePart || !timePart) return null;
-  const [year, month, day] = datePart.split(":");
-  const [hour, min, sec] = timePart.split(":");
-  return new Date(`${year}-${month}-${day}T${hour}:${min}:${sec || "00"}Z`);
+  try {
+    if (!snapshotTime || typeof snapshotTime !== "string") return null;
+    if (!snapshotTime.includes("-")) return null;
+    const [datePart, timePart] = snapshotTime.split("-");
+    if (!datePart || !timePart) return null;
+    const dateBits = datePart.split(":");
+    const timeBits = timePart.split(":");
+    if (dateBits.length < 3 || timeBits.length < 2) return null;
+    const [year, month, day] = dateBits;
+    const [hour, min, sec] = timeBits;
+    const d = new Date(`${year}-${month}-${day}T${hour}:${min}:${sec || "00"}Z`);
+    if (isNaN(d.getTime())) return null;
+    return d;
+  } catch (_) {
+    return null;
+  }
 }
 
 // Format a UTC Date as BST time label e.g. "23 Jun 01:00"
 export function toBSTLabel(d) {
+  if (!d) return "";
   return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "Europe/London" })
     + " "
     + d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/London" });
