@@ -4,53 +4,36 @@ import { kvGet } from "../../lib/kv";
 const STAKE = 2;         // £2 per point
 const STOP_PTS = 200;   // stop loss distance
 const LIMIT_PTS = 500;  // take profit distance
-const SIGNAL_THRESHOLD = 30; // minimum pts move to count as directional signal
 
-function backtestSession(candles) {
-  // Candles are sorted: 23:00 UTC (midnight BST) first, then 00:00, 00:30...
-  // Each candle has a sortVal: 23:00 UTC = -1, then 0, 30, 60, 90... (utcHour*60 + utcMin)
-  // 1am BST = 00:00 UTC = sortVal 0
-  // 1:30am BST = 00:30 UTC = sortVal 30
+function backtestFromVerdict(verdict, candles) {
+  // Only backtest if we have a real stored verdict
+  if (!verdict || verdict === "uncertain") {
+    return { signal: "none", pnl: 0, exit: null, entry: null };
+  }
 
-  // Find candle closest to 1am BST (00:00 UTC, sortVal 0)
-  const target1am = 0;
-  const target130am = 30;
+  const signal = verdict === "bullish" ? "BUY" : "SELL";
 
+  // Find 1:30am BST candle (00:30 UTC) as entry — closest match
   function sortVal(c) {
     return c.utcHour === 23 ? -1 : c.utcHour * 60 + c.utcMin;
   }
 
-  const oneAmCandle = candles.reduce((best, c) => {
-    const diff = Math.abs(sortVal(c) - target1am);
-    const bestDiff = best ? Math.abs(sortVal(best) - target1am) : Infinity;
-    // Only consider candles in the 00:00-02:00 UTC window (not the 23:00 midnight candle)
-    if (c.utcHour === 23) return best;
-    return diff < bestDiff ? c : best;
-  }, null);
-
   const oneThirtyCandle = candles.reduce((best, c) => {
-    const diff = Math.abs(sortVal(c) - target130am);
-    const bestDiff = best ? Math.abs(sortVal(best) - target130am) : Infinity;
     if (c.utcHour === 23) return best;
+    const diff = Math.abs(sortVal(c) - 30); // 30 = 00:30 UTC
+    const bestDiff = best ? Math.abs(sortVal(best) - 30) : Infinity;
     return diff < bestDiff ? c : best;
   }, null);
 
-  if (!oneAmCandle || !oneThirtyCandle || oneAmCandle === oneThirtyCandle) {
+  if (!oneThirtyCandle) {
     return { signal: "none", pnl: 0, exit: null, entry: null };
   }
-
-  // Determine signal direction from 1am → 1:30am candle move
-  const move = oneThirtyCandle.close - oneAmCandle.close;
-  let signal;
-  if (move > SIGNAL_THRESHOLD) signal = "BUY";
-  else if (move < -SIGNAL_THRESHOLD) signal = "SELL";
-  else return { signal: "flat", pnl: 0, exit: null, entry: oneThirtyCandle.close };
 
   const entry = oneThirtyCandle.close;
   const stopLevel  = signal === "BUY" ? entry - STOP_PTS  : entry + STOP_PTS;
   const limitLevel = signal === "BUY" ? entry + LIMIT_PTS : entry - LIMIT_PTS;
 
-  // Scan candles strictly after the 1:30am candle
+  // Scan candles after 1:30am using HIGH and LOW for accurate hit detection
   const oneThirtyIdx = candles.indexOf(oneThirtyCandle);
   const afterCandles = oneThirtyIdx >= 0 ? candles.slice(oneThirtyIdx + 1) : [];
 
@@ -64,7 +47,6 @@ function backtestSession(candles) {
     }
   }
 
-  // Neither stop nor limit hit by 6am
   return { signal, pnl: 0, exit: "open", entry };
 }
 
@@ -165,7 +147,11 @@ export async function GET() {
           else if (move < -100) actualDirection = "bearish";
         }
 
-        const backtest = backtestSession(candles);
+        // Only run backtest if we have a stored verdict for this session
+        const analysis = analyses[date] || null;
+        const backtest = analysis
+          ? backtestFromVerdict(analysis.verdict, candles)
+          : { signal: "none", pnl: 0, exit: null, entry: null };
 
         return {
           date,
@@ -173,30 +159,32 @@ export async function GET() {
           pointsMoved,
           openPrice: openCandle ? Math.round(openCandle.close) : null,
           candles: candles.map(c => ({ time: c.label, price: c.close })),
-          analysis: analyses[date] || null,
+          analysis,
           backtest,
         };
       })
       .filter(s => s.openPrice !== null && s.candles.length > 3)
       .reverse();
 
-    // Build P&L summary across all sessions
-    const traded   = sessions.filter(s => s.backtest.signal !== "none" && s.backtest.signal !== "flat");
-    const wins     = traded.filter(s => s.backtest.exit === "limit");
-    const losses   = traded.filter(s => s.backtest.exit === "stop");
-    const openEnd  = traded.filter(s => s.backtest.exit === "open");
-    const totalPnl = traded.reduce((sum, s) => sum + s.backtest.pnl, 0);
+    // P&L summary — only sessions with real stored verdicts
+    const withVerdicts = sessions.filter(s => s.analysis && s.backtest.signal !== "none");
+    const wins     = withVerdicts.filter(s => s.backtest.exit === "limit");
+    const losses   = withVerdicts.filter(s => s.backtest.exit === "stop");
+    const openEnd  = withVerdicts.filter(s => s.backtest.exit === "open");
+    const skipped  = sessions.filter(s => s.analysis && s.analysis.verdict === "uncertain");
+    const totalPnl = withVerdicts.reduce((sum, s) => sum + s.backtest.pnl, 0);
 
     const summary = {
       totalSessions: sessions.length,
-      traded: traded.length,
+      withVerdicts: withVerdicts.length,
       wins: wins.length,
       losses: losses.length,
       openEnd: openEnd.length,
-      noSignal: sessions.length - traded.length,
+      skipped: skipped.length,
+      noVerdict: sessions.length - (withVerdicts.length + skipped.length),
       totalPnl,
-      winRate: traded.length > 0 ? Math.round((wins.length / traded.length) * 100) : null,
-      avgWin:  wins.length   > 0 ? Math.round(wins.reduce((s, t) => s + t.backtest.pnl, 0) / wins.length) : null,
+      winRate: withVerdicts.length > 0 ? Math.round((wins.length / withVerdicts.length) * 100) : null,
+      avgWin:  wins.length   > 0 ? Math.round(wins.reduce((s, t)   => s + t.backtest.pnl, 0) / wins.length)   : null,
       avgLoss: losses.length > 0 ? Math.round(losses.reduce((s, t) => s + t.backtest.pnl, 0) / losses.length) : null,
     };
 

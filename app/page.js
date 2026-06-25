@@ -371,33 +371,41 @@ export default function NikkeiDashboard() {
               {/* P&L Summary */}
               {summary && (
                 <div style={{ ...s.card, marginBottom: 12, borderLeft: `3px solid ${summary.totalPnl >= 0 ? C.bullish : C.bearish}` }}>
-                  <p style={s.label}>Backtest P&L Summary · £2/pt · 200 stop · 500 target</p>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
-                    <span style={{ fontSize: 28, fontWeight: 800, color: summary.totalPnl >= 0 ? C.bullish : C.bearish }}>
-                      {summary.totalPnl >= 0 ? "+" : ""}£{summary.totalPnl.toLocaleString()}
-                    </span>
-                    <span style={{ fontSize: 13, color: C.textSecondary }}>
-                      {summary.winRate !== null ? `${summary.winRate}% win rate` : "—"}
-                    </span>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
-                    {[
-                      ["Traded", summary.traded],
-                      ["Wins", summary.wins, C.bullish],
-                      ["Losses", summary.losses, C.bearish],
-                      ["No signal", summary.noSignal],
-                      ["Avg win", summary.avgWin !== null ? `£${summary.avgWin}` : "—", C.bullish],
-                      ["Avg loss", summary.avgLoss !== null ? `£${Math.abs(summary.avgLoss)}` : "—", C.bearish],
-                    ].map(([label, val, color]) => (
-                      <div key={label} style={{ background: C.bg, borderRadius: 6, padding: "8px 10px" }}>
-                        <div style={{ fontSize: 16, fontWeight: 700, color: color || C.textPrimary }}>{val}</div>
-                        <div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.07em" }}>{label}</div>
+                  <p style={s.label}>Forward P&L · £2/pt · 200 stop · 500 target</p>
+                  {summary.withVerdicts === 0 ? (
+                    <p style={{ fontSize: 12, color: C.textSecondary, lineHeight: 1.6 }}>
+                      No stored verdicts yet — P&L builds from tonight as the 1am cron starts running. Check back tomorrow.
+                    </p>
+                  ) : (
+                    <>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
+                        <span style={{ fontSize: 28, fontWeight: 800, color: summary.totalPnl >= 0 ? C.bullish : C.bearish }}>
+                          {summary.totalPnl >= 0 ? "+" : ""}£{summary.totalPnl.toLocaleString()}
+                        </span>
+                        <span style={{ fontSize: 13, color: C.textSecondary }}>
+                          {summary.winRate !== null ? `${summary.winRate}% win rate` : "—"}
+                        </span>
                       </div>
-                    ))}
-                  </div>
-                  <p style={{ fontSize: 10, color: C.textMuted, margin: 0 }}>
-                    Signal: 1am→1:30am candle move &gt;30pts · {summary.totalSessions} sessions analysed
-                  </p>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+                        {[
+                          ["Traded", summary.withVerdicts],
+                          ["Wins", summary.wins, C.bullish],
+                          ["Losses", summary.losses, C.bearish],
+                          ["Skipped", summary.skipped],
+                          ["Avg win", summary.avgWin !== null ? `£${summary.avgWin}` : "—", C.bullish],
+                          ["Avg loss", summary.avgLoss !== null ? `£${Math.abs(summary.avgLoss)}` : "—", C.bearish],
+                        ].map(([label, val, color]) => (
+                          <div key={label} style={{ background: C.bg, borderRadius: 6, padding: "8px 10px" }}>
+                            <div style={{ fontSize: 16, fontWeight: 700, color: color || C.textPrimary }}>{val}</div>
+                            <div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.07em" }}>{label}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <p style={{ fontSize: 10, color: C.textMuted, margin: 0 }}>
+                        Based on {summary.withVerdicts} session{summary.withVerdicts !== 1 ? "s" : ""} with stored 1am verdicts · {summary.totalSessions} total sessions in view
+                      </p>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -443,12 +451,12 @@ export default function NikkeiDashboard() {
                     {session.analysis && <span style={{ marginLeft: 8, color: C.textMuted }}>· 1am analysis: {session.analysis.confidence} confidence</span>}
                   </p>
 
-                  {/* Backtest P&L for this session */}
-                  {session.backtest && session.backtest.signal !== "none" && (
+                  {/* Backtest P&L — only shown for sessions with stored verdicts */}
+                  {session.analysis && session.backtest && session.backtest.signal !== "none" && (
                     <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, padding: "6px 10px", background: C.bg, borderRadius: 6 }}>
                       <span style={{ fontSize: 11, color: C.textMuted }}>Backtest:</span>
-                      <span style={{ fontSize: 11, fontWeight: 600, color: session.backtest.signal === "BUY" ? C.bullish : session.backtest.signal === "SELL" ? C.bearish : C.textMuted }}>
-                        {session.backtest.signal === "flat" ? "No signal (flat)" : session.backtest.signal}
+                      <span style={{ fontSize: 11, fontWeight: 600, color: session.backtest.signal === "BUY" ? C.bullish : C.bearish }}>
+                        {session.backtest.signal}
                       </span>
                       {session.backtest.entry && <span style={{ fontSize: 11, color: C.textMuted }}>@ {Math.round(session.backtest.entry)}</span>}
                       {session.backtest.exit && session.backtest.exit !== "open" && (
