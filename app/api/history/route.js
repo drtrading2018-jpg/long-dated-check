@@ -48,7 +48,7 @@ export async function GET() {
   try {
     const { cst, token, baseUrl, apiKey } = await getIGSession();
 
-    const res = await fetch(`${baseUrl}/prices/${NIKKEI_EPIC}/MINUTE_30/1000`, {
+    const res = await fetch(`${baseUrl}/prices/${NIKKEI_EPIC}/MINUTE_30/500`, {
       headers: {
         "X-IG-API-KEY": apiKey,
         "CST": cst,
