@@ -7,11 +7,35 @@ const LIMIT_PTS = 500;  // take profit distance
 const SIGNAL_THRESHOLD = 30; // minimum pts move to count as directional signal
 
 function backtestSession(candles) {
-  // Find key candles (candles already sorted: 23:00 UTC first, then 00:00, 00:30...)
-  const oneAmCandle = candles.find(c => c.utcHour === 0 && c.utcMin === 0);
-  const oneThirtyCandle = candles.find(c => c.utcHour === 0 && c.utcMin === 30);
+  // Candles are sorted: 23:00 UTC (midnight BST) first, then 00:00, 00:30...
+  // Each candle has a sortVal: 23:00 UTC = -1, then 0, 30, 60, 90... (utcHour*60 + utcMin)
+  // 1am BST = 00:00 UTC = sortVal 0
+  // 1:30am BST = 00:30 UTC = sortVal 30
 
-  if (!oneAmCandle || !oneThirtyCandle) {
+  // Find candle closest to 1am BST (00:00 UTC, sortVal 0)
+  const target1am = 0;
+  const target130am = 30;
+
+  function sortVal(c) {
+    return c.utcHour === 23 ? -1 : c.utcHour * 60 + c.utcMin;
+  }
+
+  const oneAmCandle = candles.reduce((best, c) => {
+    const diff = Math.abs(sortVal(c) - target1am);
+    const bestDiff = best ? Math.abs(sortVal(best) - target1am) : Infinity;
+    // Only consider candles in the 00:00-02:00 UTC window (not the 23:00 midnight candle)
+    if (c.utcHour === 23) return best;
+    return diff < bestDiff ? c : best;
+  }, null);
+
+  const oneThirtyCandle = candles.reduce((best, c) => {
+    const diff = Math.abs(sortVal(c) - target130am);
+    const bestDiff = best ? Math.abs(sortVal(best) - target130am) : Infinity;
+    if (c.utcHour === 23) return best;
+    return diff < bestDiff ? c : best;
+  }, null);
+
+  if (!oneAmCandle || !oneThirtyCandle || oneAmCandle === oneThirtyCandle) {
     return { signal: "none", pnl: 0, exit: null, entry: null };
   }
 
@@ -26,8 +50,8 @@ function backtestSession(candles) {
   const stopLevel  = signal === "BUY" ? entry - STOP_PTS  : entry + STOP_PTS;
   const limitLevel = signal === "BUY" ? entry + LIMIT_PTS : entry - LIMIT_PTS;
 
-  // Scan candles after 1:30am using HIGH and LOW for accurate hit detection
-  const oneThirtyIdx = candles.findIndex(c => c.utcHour === 0 && c.utcMin === 30);
+  // Scan candles strictly after the 1:30am candle
+  const oneThirtyIdx = candles.indexOf(oneThirtyCandle);
   const afterCandles = oneThirtyIdx >= 0 ? candles.slice(oneThirtyIdx + 1) : [];
 
   for (const c of afterCandles) {
