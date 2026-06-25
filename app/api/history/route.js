@@ -1,11 +1,12 @@
 import { getIGSession, parseIGTime, toBSTLabel, NIKKEI_EPIC } from "../../lib/ig-auth";
+import { kvGet } from "../../lib/kv";
 
 export async function GET() {
   try {
     const { cst, token, baseUrl, apiKey } = await getIGSession();
 
-    // 500 candles at 30-min covers ~25 trading days
-    const res = await fetch(`${baseUrl}/prices/${NIKKEI_EPIC}/MINUTE_30/500`, {
+    // Fetch 1,000 candles = ~3.5 months of overnight sessions
+    const res = await fetch(`${baseUrl}/prices/${NIKKEI_EPIC}/MINUTE_30/1000`, {
       headers: {
         "X-IG-API-KEY": apiKey,
         "CST": cst,
@@ -27,8 +28,7 @@ export async function GET() {
       return Response.json({ error: "No price data returned from IG" }, { status: 502 });
     }
 
-    // Group candles by BST session date
-    // Session starts at 23:00 UTC (midnight BST) and runs to ~06:30 UTC
+    // Group candles by BST session date (midnight BST = 23:00 UTC previous day)
     const bySession = {};
 
     prices.forEach(p => {
@@ -47,30 +47,38 @@ export async function GET() {
 
         let sessionDate;
         if (utcHour === 23) {
-          // Midnight BST — label as next UTC day (the actual BST session date)
           const next = new Date(d.getTime() + 86400000);
           sessionDate = next.toISOString().slice(0, 10);
         } else if (utcHour < 7) {
           sessionDate = d.toISOString().slice(0, 10);
         } else {
-          return; // Outside Tokyo session hours
+          return;
         }
 
         if (!bySession[sessionDate]) bySession[sessionDate] = [];
         bySession[sessionDate].push({
-          utcHour,
-          utcMin,
+          utcHour, utcMin,
           close: mid,
           label: toBSTLabel(d),
         });
-      } catch (_) {
-        // Skip malformed candles
-      }
+      } catch (_) {}
     });
 
+    // Fetch stored analyses from Redis
+    const sessionIndex = await kvGet("nikkei:sessions:index") || [];
+    const analyses = {};
+    await Promise.all(
+      sessionIndex.map(async date => {
+        try {
+          const analysis = await kvGet(`nikkei:session:${date}`);
+          if (analysis) analyses[date] = analysis;
+        } catch (_) {}
+      })
+    );
+
+    // Build sessions
     const sessions = Object.entries(bySession)
       .map(([date, candles]) => {
-        // Sort chronologically: 23:00 UTC first, then 00:00 onwards
         candles.sort((a, b) => {
           const aVal = a.utcHour === 23 ? -1 : a.utcHour * 60 + a.utcMin;
           const bVal = b.utcHour === 23 ? -1 : b.utcHour * 60 + b.utcMin;
@@ -81,22 +89,23 @@ export async function GET() {
           || candles.find(c => c.utcHour === 0 && c.utcMin === 0);
         const closeCandle = [...candles].reverse().find(c => c.utcHour < 7);
 
-        let direction = "uncertain";
+        let actualDirection = "uncertain";
         let pointsMoved = null;
 
         if (openCandle?.close && closeCandle?.close) {
           const move = closeCandle.close - openCandle.close;
           pointsMoved = Math.round(move);
-          if (move > 100) direction = "bullish";
-          else if (move < -100) direction = "bearish";
+          if (move > 100) actualDirection = "bullish";
+          else if (move < -100) actualDirection = "bearish";
         }
 
         return {
           date,
-          direction,
+          actualDirection,
           pointsMoved,
           openPrice: openCandle ? Math.round(openCandle.close) : null,
           candles: candles.map(c => ({ time: c.label, price: c.close })),
+          analysis: analyses[date] || null, // Full stored analysis if available
         };
       })
       .filter(s => s.openPrice !== null && s.candles.length > 3)

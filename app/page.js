@@ -393,15 +393,19 @@ export default function NikkeiDashboard() {
 
               {session && (
                 <div style={s.card}>
-                  {/* Date + actual outcome */}
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                    <p style={{ fontSize: 13, fontWeight: 600, color: C.textPrimary, margin: 0 }}>{fmtDate(session.date)}</p>
-                    <span style={s.badge(session.direction)}>{session.direction}</span>
+                  {/* Date header */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                    <p style={{ fontSize: 14, fontWeight: 700, color: C.textPrimary, margin: 0 }}>{fmtDate(session.date)}</p>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      {session.analysis && <span style={s.badge(session.analysis.verdict)}>{session.analysis.verdict}</span>}
+                      <span style={{ ...s.badge(session.actualDirection), border: `1px dashed ${vColor[session.actualDirection] || C.border}` }}>actual: {session.actualDirection}</span>
+                    </div>
                   </div>
 
-                  {/* Actual move */}
-                  <p style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}>
-                    1am open: {session.openPrice?.toLocaleString()} · Move by 3am: {session.pointsMoved !== null ? (session.pointsMoved > 0 ? "+" : "") + session.pointsMoved + " pts" : "—"}
+                  {/* Open price + move */}
+                  <p style={{ fontSize: 11, color: C.textMuted, marginBottom: 8 }}>
+                    Open: {session.openPrice?.toLocaleString()} · Full session move: {session.pointsMoved !== null ? (session.pointsMoved > 0 ? "+" : "") + session.pointsMoved + " pts" : "—"}
+                    {session.analysis && <span style={{ marginLeft: 8, color: C.textMuted }}>· 1am analysis: {session.analysis.confidence} confidence</span>}
                   </p>
 
                   {/* Session chart */}
@@ -415,34 +419,101 @@ export default function NikkeiDashboard() {
                           tick={{ fontSize: 8, fill: C.textMuted }} axisLine={false} tickLine={false} width={48}
                         />
                         <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, fontSize: 10, borderRadius: 6 }} labelStyle={{ color: C.textSecondary }} />
-                        <Line type="monotone" dataKey="price" stroke={vColor[session.direction] || C.accent} strokeWidth={2} dot={false} />
+                        <Line type="monotone" dataKey="price" stroke={vColor[session.actualDirection] || C.accent} strokeWidth={2} dot={false} />
                       </LineChart>
                     </ResponsiveContainer>
                   </div>
 
-                  {/* Pre-signal assessment */}
-                  <p style={{ ...s.label, marginBottom: 6 }}>What did the pre-signal suggest?</p>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    {["bullish", "bearish", "uncertain"].map(v => (
-                      <button
-                        key={v}
-                        onClick={() => saveSignal(session.date, v)}
-                        style={{
-                          flex: 1, padding: "7px 0", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", textTransform: "uppercase",
-                          background: signals[session.date] === v ? vBg[v] : "none",
-                          border: `1px solid ${signals[session.date] === v ? vColor[v] : C.border}`,
-                          color: signals[session.date] === v ? vColor[v] : C.textMuted,
-                        }}
-                      >{v}</button>
-                    ))}
-                  </div>
+                  {/* Stored 1am analysis */}
+                  {session.analysis ? (
+                    <>
+                      {/* Reasoning */}
+                      <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 10, marginBottom: 10 }}>
+                        <p style={{ ...s.label, marginBottom: 4 }}>1am Analysis Reasoning</p>
+                        <p style={{ fontSize: 12, color: "#B8C4CE", lineHeight: 1.55, margin: 0 }}>{session.analysis.reasoning}</p>
+                      </div>
 
-                  {/* Match indicator */}
-                  {signals[session.date] && (
-                    <p style={{ fontSize: 11, marginTop: 8, color: signals[session.date] === session.direction ? C.bullish : C.bearish }}>
-                      {signals[session.date] === session.direction ? "✓ Signal matched outcome" : "✗ Signal did not match outcome"}
+                      {/* S&P */}
+                      {session.analysis.spx && (
+                        <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 8, marginBottom: 8 }}>
+                          <p style={{ ...s.label, marginBottom: 4 }}>S&amp;P 500 Close</p>
+                          <div style={{ display: "flex", justifyContent: "space-between" }}>
+                            <span style={{ fontSize: 12, color: C.textSecondary }}>{session.analysis.spx.notes}</span>
+                            <span style={{ fontSize: 12, fontWeight: 600, fontFamily: "monospace", color: session.analysis.spx.direction === "up" ? C.bullish : C.bearish }}>{session.analysis.spx.change}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Events */}
+                      {session.analysis.events?.length > 0 && (
+                        <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 8, marginBottom: 8 }}>
+                          <p style={{ ...s.label, marginBottom: 4 }}>Economic Events</p>
+                          {session.analysis.events.map((ev, i) => (
+                            <div key={i} style={{ display: "flex", gap: 8, padding: "4px 0", borderBottom: i === session.analysis.events.length - 1 ? "none" : `1px solid ${C.border}` }}>
+                              <div style={{ width: 7, height: 7, borderRadius: "50%", background: impDot[ev.importance] || C.textMuted, marginTop: 4, flexShrink: 0 }} />
+                              <span style={{ fontSize: 11, fontFamily: "monospace", color: C.textMuted, minWidth: 48 }}>{ev.time}</span>
+                              <span style={{ fontSize: 12, color: "#B8C4CE", flex: 1 }}>{ev.event}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* News */}
+                      {session.analysis.news?.length > 0 && (
+                        <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 8, marginBottom: 8 }}>
+                          <p style={{ ...s.label, marginBottom: 4 }}>Market News</p>
+                          {session.analysis.news.map((item, i) => (
+                            <div key={i} style={{ padding: "6px 0", borderBottom: i === session.analysis.news.length - 1 ? "none" : `1px solid ${C.border}` }}>
+                              <p style={{ fontSize: 12, color: "#B8C4CE", lineHeight: 1.4, margin: 0 }}>{item.headline}</p>
+                              <p style={{ fontSize: 10, fontWeight: 600, color: impColor[item.impact] || C.textMuted, textTransform: "uppercase", letterSpacing: "0.07em", marginTop: 2 }}>{item.impact}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Watchouts */}
+                      {session.analysis.watchouts?.length > 0 && (
+                        <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 8, marginBottom: 10 }}>
+                          <p style={{ ...s.label, marginBottom: 4 }}>Watch For</p>
+                          {session.analysis.watchouts.map((w, i) => (
+                            <div key={i} style={{ display: "flex", gap: 6, padding: "3px 0" }}>
+                              <span style={{ color: C.accent, flexShrink: 0 }}>›</span>
+                              <span style={{ fontSize: 12, color: "#B8C4CE" }}>{w}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <p style={{ fontSize: 11, color: C.textMuted, fontStyle: "italic", borderTop: `1px solid ${C.border}`, paddingTop: 8, marginBottom: 8 }}>
+                      No 1am analysis stored for this session — automated analysis begins from tonight.
                     </p>
                   )}
+
+                  {/* Pre-signal assessment */}
+                  <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
+                    <p style={{ ...s.label, marginBottom: 6 }}>What did the pre-signal suggest?</p>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {["bullish", "bearish", "uncertain"].map(v => (
+                        <button
+                          key={v}
+                          onClick={() => saveSignal(session.date, v)}
+                          style={{
+                            flex: 1, padding: "7px 0", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", textTransform: "uppercase",
+                            background: signals[session.date] === v ? vBg[v] : "none",
+                            border: `1px solid ${signals[session.date] === v ? vColor[v] : C.border}`,
+                            color: signals[session.date] === v ? vColor[v] : C.textMuted,
+                          }}
+                        >{v}</button>
+                      ))}
+                    </div>
+
+                    {signals[session.date] && (
+                      <p style={{ fontSize: 11, marginTop: 8, color: signals[session.date] === session.actualDirection ? C.bullish : C.bearish }}>
+                        {signals[session.date] === session.actualDirection ? "✓ Signal matched actual outcome" : "✗ Signal did not match actual outcome"}
+                      </p>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -454,7 +525,29 @@ export default function NikkeiDashboard() {
       {/* ── TRADE LOG TAB ── */}
       {tab === "trades" && (
         <div style={s.body}>
-          {/* Manual trigger */}
+          {/* Manual analysis trigger */}
+          <div style={{ ...s.card, marginBottom: 16 }}>
+            <p style={s.label}>Manual Analysis Trigger</p>
+            <p style={{ fontSize: 12, color: C.textSecondary, marginBottom: 10 }}>
+              Run the 1am analysis now and store it in history. Same as the automated 1am cron job.
+            </p>
+            <button
+              style={{ ...s.saveBtn, fontSize: 13, padding: "10px 20px", background: C.surface, border: `1px solid ${C.border}`, color: C.textSecondary }}
+              onClick={async () => {
+                try {
+                  const res = await fetch("/api/cron-analyze");
+                  const data = await res.json();
+                  alert(data.error ? `Error: ${data.error}` : `Stored: ${data.verdict} (${data.confidence}) for ${data.sessionDate}`);
+                } catch (err) {
+                  alert(`Error: ${err.message}`);
+                }
+              }}
+            >
+              Run 1am Analysis Now
+            </button>
+          </div>
+
+          {/* Manual trade trigger */}
           <div style={{ ...s.card, marginBottom: 16 }}>
             <p style={s.label}>Manual Trade Trigger</p>
             <p style={{ fontSize: 12, color: C.textSecondary, marginBottom: 10 }}>
