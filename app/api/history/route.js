@@ -31,11 +31,11 @@ export async function GET() {
     // Session starts at 23:00 UTC (midnight BST) and runs to ~06:30 UTC
     const bySession = {};
 
-    prices.forEach(p => {
-      const mid = (p.closePrice.bid + p.closePrice.ask) / 2;
-      if (!mid) return;
-
-      const d = parseIGTime(p.snapshotTime);
+   prices.forEach(p => {
+  const mid = (p.closePrice.bid + p.closePrice.ask) / 2;
+  if (!mid) return;
+  const d = parseIGTime(p.snapshotTime);
+  if (!d) return;
       const utcHour = d.getUTCHours();
       const utcMin = d.getUTCMinutes();
 
