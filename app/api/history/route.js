@@ -1,11 +1,53 @@
 import { getIGSession, parseIGTime, toBSTLabel, NIKKEI_EPIC } from "../../lib/ig-auth";
 import { kvGet } from "../../lib/kv";
 
+const STAKE = 2;         // £2 per point
+const STOP_PTS = 200;   // stop loss distance
+const LIMIT_PTS = 500;  // take profit distance
+const SIGNAL_THRESHOLD = 30; // minimum pts move to count as directional signal
+
+function backtestSession(candles) {
+  // Find key candles (candles already sorted: 23:00 UTC first, then 00:00, 00:30...)
+  const oneAmCandle = candles.find(c => c.utcHour === 0 && c.utcMin === 0);
+  const oneThirtyCandle = candles.find(c => c.utcHour === 0 && c.utcMin === 30);
+
+  if (!oneAmCandle || !oneThirtyCandle) {
+    return { signal: "none", pnl: 0, exit: null, entry: null };
+  }
+
+  // Determine signal direction from 1am → 1:30am candle move
+  const move = oneThirtyCandle.close - oneAmCandle.close;
+  let signal;
+  if (move > SIGNAL_THRESHOLD) signal = "BUY";
+  else if (move < -SIGNAL_THRESHOLD) signal = "SELL";
+  else return { signal: "flat", pnl: 0, exit: null, entry: oneThirtyCandle.close };
+
+  const entry = oneThirtyCandle.close;
+  const stopLevel  = signal === "BUY" ? entry - STOP_PTS  : entry + STOP_PTS;
+  const limitLevel = signal === "BUY" ? entry + LIMIT_PTS : entry - LIMIT_PTS;
+
+  // Scan candles after 1:30am using HIGH and LOW for accurate hit detection
+  const oneThirtyIdx = candles.findIndex(c => c.utcHour === 0 && c.utcMin === 30);
+  const afterCandles = oneThirtyIdx >= 0 ? candles.slice(oneThirtyIdx + 1) : [];
+
+  for (const c of afterCandles) {
+    if (signal === "BUY") {
+      if (c.low  !== null && c.low  <= stopLevel)  return { signal, pnl: -(STOP_PTS * STAKE),  exit: "stop",  entry };
+      if (c.high !== null && c.high >= limitLevel) return { signal, pnl:  (LIMIT_PTS * STAKE), exit: "limit", entry };
+    } else {
+      if (c.high !== null && c.high >= stopLevel)  return { signal, pnl: -(STOP_PTS * STAKE),  exit: "stop",  entry };
+      if (c.low  !== null && c.low  <= limitLevel) return { signal, pnl:  (LIMIT_PTS * STAKE), exit: "limit", entry };
+    }
+  }
+
+  // Neither stop nor limit hit by 6am
+  return { signal, pnl: 0, exit: "open", entry };
+}
+
 export async function GET() {
   try {
     const { cst, token, baseUrl, apiKey } = await getIGSession();
 
-    // Fetch 1,000 candles = ~3.5 months of overnight sessions
     const res = await fetch(`${baseUrl}/prices/${NIKKEI_EPIC}/MINUTE_30/1000`, {
       headers: {
         "X-IG-API-KEY": apiKey,
@@ -28,22 +70,20 @@ export async function GET() {
       return Response.json({ error: "No price data returned from IG" }, { status: 502 });
     }
 
-    // Group candles by BST session date (midnight BST = 23:00 UTC previous day)
+    // Group candles by BST session date, storing close + high + low
     const bySession = {};
 
     prices.forEach(p => {
       try {
-        const bid = p?.closePrice?.bid;
-        const ask = p?.closePrice?.ask;
-        if (bid == null || ask == null) return;
-        const mid = (bid + ask) / 2;
-        if (!mid) return;
+        const closeBid = p?.closePrice?.bid;
+        const closeAsk = p?.closePrice?.ask;
+        if (closeBid == null || closeAsk == null) return;
 
         const d = parseIGTime(p.snapshotTime);
         if (!d) return;
 
         const utcHour = d.getUTCHours();
-        const utcMin = d.getUTCMinutes();
+        const utcMin  = d.getUTCMinutes();
 
         let sessionDate;
         if (utcHour === 23) {
@@ -57,8 +97,11 @@ export async function GET() {
 
         if (!bySession[sessionDate]) bySession[sessionDate] = [];
         bySession[sessionDate].push({
-          utcHour, utcMin,
-          close: mid,
+          utcHour,
+          utcMin,
+          close: (closeBid + closeAsk) / 2,
+          high:  p.highPrice  ? (p.highPrice.bid  + p.highPrice.ask)  / 2 : null,
+          low:   p.lowPrice   ? (p.lowPrice.bid   + p.lowPrice.ask)   / 2 : null,
           label: toBSTLabel(d),
         });
       } catch (_) {}
@@ -76,7 +119,7 @@ export async function GET() {
       })
     );
 
-    // Build sessions
+    // Build sessions with backtest
     const sessions = Object.entries(bySession)
       .map(([date, candles]) => {
         candles.sort((a, b) => {
@@ -85,13 +128,12 @@ export async function GET() {
           return aVal - bVal;
         });
 
-        const openCandle = candles.find(c => c.utcHour === 23 && c.utcMin === 0)
-          || candles.find(c => c.utcHour === 0 && c.utcMin === 0);
+        const openCandle  = candles.find(c => c.utcHour === 23 && c.utcMin === 0)
+                         || candles.find(c => c.utcHour === 0  && c.utcMin === 0);
         const closeCandle = [...candles].reverse().find(c => c.utcHour < 7);
 
         let actualDirection = "uncertain";
         let pointsMoved = null;
-
         if (openCandle?.close && closeCandle?.close) {
           const move = closeCandle.close - openCandle.close;
           pointsMoved = Math.round(move);
@@ -99,19 +141,42 @@ export async function GET() {
           else if (move < -100) actualDirection = "bearish";
         }
 
+        const backtest = backtestSession(candles);
+
         return {
           date,
           actualDirection,
           pointsMoved,
           openPrice: openCandle ? Math.round(openCandle.close) : null,
           candles: candles.map(c => ({ time: c.label, price: c.close })),
-          analysis: analyses[date] || null, // Full stored analysis if available
+          analysis: analyses[date] || null,
+          backtest,
         };
       })
       .filter(s => s.openPrice !== null && s.candles.length > 3)
       .reverse();
 
-    return Response.json({ sessions });
+    // Build P&L summary across all sessions
+    const traded   = sessions.filter(s => s.backtest.signal !== "none" && s.backtest.signal !== "flat");
+    const wins     = traded.filter(s => s.backtest.exit === "limit");
+    const losses   = traded.filter(s => s.backtest.exit === "stop");
+    const openEnd  = traded.filter(s => s.backtest.exit === "open");
+    const totalPnl = traded.reduce((sum, s) => sum + s.backtest.pnl, 0);
+
+    const summary = {
+      totalSessions: sessions.length,
+      traded: traded.length,
+      wins: wins.length,
+      losses: losses.length,
+      openEnd: openEnd.length,
+      noSignal: sessions.length - traded.length,
+      totalPnl,
+      winRate: traded.length > 0 ? Math.round((wins.length / traded.length) * 100) : null,
+      avgWin:  wins.length   > 0 ? Math.round(wins.reduce((s, t) => s + t.backtest.pnl, 0) / wins.length) : null,
+      avgLoss: losses.length > 0 ? Math.round(losses.reduce((s, t) => s + t.backtest.pnl, 0) / losses.length) : null,
+    };
+
+    return Response.json({ sessions, summary });
   } catch (err) {
     return Response.json({ error: err.message }, { status: 500 });
   }

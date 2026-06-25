@@ -34,6 +34,7 @@ export default function NikkeiDashboard() {
 
   // History tab state
   const [sessions, setSessions] = useState([]);
+  const [summary, setSummary] = useState(null);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionsError, setSessionsError] = useState(null);
   const [sessionIdx, setSessionIdx] = useState(0);
@@ -135,6 +136,7 @@ export default function NikkeiDashboard() {
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || "History failed");
       setSessions(data.sessions);
+      setSummary(data.summary || null);
       setSessionIdx(0);
     } catch (err) { setSessionsError(err.message); }
     finally { setSessionsLoading(false); }
@@ -366,7 +368,40 @@ export default function NikkeiDashboard() {
 
           {sessions.length > 0 && (
             <>
-              {/* Accuracy stats */}
+              {/* P&L Summary */}
+              {summary && (
+                <div style={{ ...s.card, marginBottom: 12, borderLeft: `3px solid ${summary.totalPnl >= 0 ? C.bullish : C.bearish}` }}>
+                  <p style={s.label}>Backtest P&L Summary · £2/pt · 200 stop · 500 target</p>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
+                    <span style={{ fontSize: 28, fontWeight: 800, color: summary.totalPnl >= 0 ? C.bullish : C.bearish }}>
+                      {summary.totalPnl >= 0 ? "+" : ""}£{summary.totalPnl.toLocaleString()}
+                    </span>
+                    <span style={{ fontSize: 13, color: C.textSecondary }}>
+                      {summary.winRate !== null ? `${summary.winRate}% win rate` : "—"}
+                    </span>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    {[
+                      ["Traded", summary.traded],
+                      ["Wins", summary.wins, C.bullish],
+                      ["Losses", summary.losses, C.bearish],
+                      ["No signal", summary.noSignal],
+                      ["Avg win", summary.avgWin !== null ? `£${summary.avgWin}` : "—", C.bullish],
+                      ["Avg loss", summary.avgLoss !== null ? `£${Math.abs(summary.avgLoss)}` : "—", C.bearish],
+                    ].map(([label, val, color]) => (
+                      <div key={label} style={{ background: C.bg, borderRadius: 6, padding: "8px 10px" }}>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: color || C.textPrimary }}>{val}</div>
+                        <div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.07em" }}>{label}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <p style={{ fontSize: 10, color: C.textMuted, margin: 0 }}>
+                    Signal: 1am→1:30am candle move &gt;30pts · {summary.totalSessions} sessions analysed
+                  </p>
+                </div>
+              )}
+
+              {/* Simple session stats */}
               <div style={s.statRow}>
                 <div style={s.stat}>
                   <div style={s.statNum}>{sessions.length}</div>
@@ -403,10 +438,29 @@ export default function NikkeiDashboard() {
                   </div>
 
                   {/* Open price + move */}
-                  <p style={{ fontSize: 11, color: C.textMuted, marginBottom: 8 }}>
+                  <p style={{ fontSize: 11, color: C.textMuted, marginBottom: 4 }}>
                     Open: {session.openPrice?.toLocaleString()} · Full session move: {session.pointsMoved !== null ? (session.pointsMoved > 0 ? "+" : "") + session.pointsMoved + " pts" : "—"}
                     {session.analysis && <span style={{ marginLeft: 8, color: C.textMuted }}>· 1am analysis: {session.analysis.confidence} confidence</span>}
                   </p>
+
+                  {/* Backtest P&L for this session */}
+                  {session.backtest && session.backtest.signal !== "none" && (
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, padding: "6px 10px", background: C.bg, borderRadius: 6 }}>
+                      <span style={{ fontSize: 11, color: C.textMuted }}>Backtest:</span>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: session.backtest.signal === "BUY" ? C.bullish : session.backtest.signal === "SELL" ? C.bearish : C.textMuted }}>
+                        {session.backtest.signal === "flat" ? "No signal (flat)" : session.backtest.signal}
+                      </span>
+                      {session.backtest.entry && <span style={{ fontSize: 11, color: C.textMuted }}>@ {Math.round(session.backtest.entry)}</span>}
+                      {session.backtest.exit && session.backtest.exit !== "open" && (
+                        <span style={{ fontSize: 11, fontWeight: 700, color: session.backtest.pnl > 0 ? C.bullish : session.backtest.pnl < 0 ? C.bearish : C.textMuted, marginLeft: "auto" }}>
+                          {session.backtest.pnl > 0 ? "+" : ""}£{session.backtest.pnl} ({session.backtest.exit})
+                        </span>
+                      )}
+                      {session.backtest.exit === "open" && (
+                        <span style={{ fontSize: 11, color: C.textMuted, marginLeft: "auto" }}>Neither hit by 6am · £0</span>
+                      )}
+                    </div>
+                  )}
 
                   {/* Session chart */}
                   <div style={{ height: 160, marginBottom: 12 }}>
