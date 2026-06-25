@@ -1,77 +1,87 @@
+import { getIGSession, parseIGTime, toBSTLabel } from "../../lib/ig-auth";
+
+const EPIC = "IX.D.NIKKEI.CASH.IP";
+
 export async function GET() {
   try {
-    const url = "https://query1.finance.yahoo.com/v8/finance/chart/%5EN225?range=1mo&interval=30m";
-    const res = await fetch(url, {
-      headers: { "Accept": "application/json", "User-Agent": "Mozilla/5.0" },
-    });
-    const data = await res.json();
+    const { cst, token, baseUrl, apiKey } = await getIGSession();
 
-    const result = data?.chart?.result?.[0];
-    if (!result) {
-      return Response.json({ error: "No data returned for ^N225" }, { status: 502 });
+    // 500 candles at 30-min covers ~25 trading days (each session ~13 candles)
+    const res = await fetch(`${baseUrl}/prices/${EPIC}/MINUTE_30/500`, {
+      headers: {
+        "X-IG-API-KEY": apiKey,
+        "CST": cst,
+        "X-SECURITY-TOKEN": token,
+        "Accept": "application/json; charset=UTF-8",
+        "Version": "2",
+      },
+    });
+
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`IG prices failed (${res.status}): ${body.slice(0, 200)}`);
     }
 
-    const timestamps = result.timestamp || [];
-    const closes = result.indicators?.quote?.[0]?.close || [];
+    const data = await res.json();
+    const prices = data.prices || [];
 
-    // Each Tokyo session starts at 23:00 UTC the previous evening (= midnight BST in summer)
-    // and runs through to ~06:30 UTC (= 7:30am BST).
-    // We group candles by the BST calendar date of the session open (midnight BST),
-    // which means candles from 23:00 UTC on day N belong to the session labelled day N+1.
+    if (prices.length === 0) {
+      return Response.json({ error: "No price data returned from IG" }, { status: 502 });
+    }
+
+    // Group candles by BST session date
+    // Session starts at 23:00 UTC (midnight BST) and runs to ~06:30 UTC
     const bySession = {};
-    timestamps.forEach((t, i) => {
-      if (closes[i] === null || closes[i] === undefined) return;
-      const d = new Date(t * 1000);
+
+    prices.forEach(p => {
+      const mid = (p.closePrice.bid + p.closePrice.ask) / 2;
+      if (!mid) return;
+
+      const d = parseIGTime(p.snapshotTime);
       const utcHour = d.getUTCHours();
       const utcMin = d.getUTCMinutes();
 
-      // Session label = the BST date of the Tokyo open (midnight BST)
-      // Candles from 23:00 UTC belong to the NEXT calendar day in BST
       let sessionDate;
       if (utcHour === 23) {
-        // This candle is midnight BST — label it as next UTC day
-        const next = new Date(t * 1000 + 86400000);
+        // Midnight BST — label as next UTC day (the actual BST session date)
+        const next = new Date(d.getTime() + 86400000);
         sessionDate = next.toISOString().slice(0, 10);
       } else if (utcHour < 7) {
-        // Morning session candles — same UTC date as the BST session date
         sessionDate = d.toISOString().slice(0, 10);
       } else {
-        // Outside Tokyo hours — skip
-        return;
+        return; // Outside Tokyo session hours
       }
 
       if (!bySession[sessionDate]) bySession[sessionDate] = [];
       bySession[sessionDate].push({
         utcHour,
         utcMin,
-        close: closes[i],
-        label: d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/London" }),
+        close: mid,
+        label: toBSTLabel(d),
       });
     });
 
-    // Build one session object per day
     const sessions = Object.entries(bySession)
       .map(([date, candles]) => {
-        // Sort candles chronologically (23:00 first, then 00:00 onwards)
+        // Sort chronologically: 23:00 UTC first, then 00:00 onwards
         candles.sort((a, b) => {
           const aVal = a.utcHour === 23 ? -1 : a.utcHour * 60 + a.utcMin;
           const bVal = b.utcHour === 23 ? -1 : b.utcHour * 60 + b.utcMin;
           return aVal - bVal;
         });
 
-        // Midnight BST open = 23:00 UTC candle
-        const openCandle = candles.find(c => c.utcHour === 23 && c.utcMin === 0);
-        // 1am BST = 00:00 UTC — the Tokyo official open
-        const tokyoOpen = candles.find(c => c.utcHour === 0 && c.utcMin === 0);
-        // Measure direction from midnight open to session close (~06:30 UTC)
+        // Open = midnight BST (23:00 UTC) or failing that 1am BST (00:00 UTC)
+        const openCandle = candles.find(c => c.utcHour === 23 && c.utcMin === 0)
+          || candles.find(c => c.utcHour === 0 && c.utcMin === 0);
+
+        // Close = last candle of the session
         const closeCandle = [...candles].reverse().find(c => c.utcHour < 7);
 
         let direction = "uncertain";
         let pointsMoved = null;
-        const refCandle = openCandle || tokyoOpen;
 
-        if (refCandle?.close && closeCandle?.close) {
-          const move = closeCandle.close - refCandle.close;
+        if (openCandle?.close && closeCandle?.close) {
+          const move = closeCandle.close - openCandle.close;
           pointsMoved = Math.round(move);
           if (move > 100) direction = "bullish";
           else if (move < -100) direction = "bearish";
@@ -81,7 +91,7 @@ export async function GET() {
           date,
           direction,
           pointsMoved,
-          openPrice: refCandle ? Math.round(refCandle.close) : null,
+          openPrice: openCandle ? Math.round(openCandle.close) : null,
           candles: candles.map(c => ({ time: c.label, price: c.close })),
         };
       })
