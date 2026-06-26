@@ -5,15 +5,29 @@ export async function GET() {
     const { cst, token, baseUrl, apiKey } = await getIGSession();
 
     // Build date range: midnight BST (23:00 UTC previous day) to 6am BST (05:00 UTC)
-    // Always shows the most recent completed or in-progress Tokyo session
-    const now = new Date();
+    // The Tokyo session spans two UTC calendar days:
+    //   23:00 UTC (day N) → 05:00 UTC (day N+1)
+    // So UTC hours 00:00-05:00 mean we're INSIDE tonight's session (start was 23:00 yesterday UTC)
+    // UTC hours 05:00-23:00 mean the session is over — show the most recently completed one
 
-    // Find the most recent 23:00 UTC (midnight BST)
+    const now = new Date();
+    const utcHour = now.getUTCHours();
+
     const sessionStart = new Date(now);
-    sessionStart.setUTCHours(23, 0, 0, 0);
-    // If current UTC time is before 23:00, step back one day
-    if (now.getUTCHours() < 23) {
+    sessionStart.setUTCMinutes(0, 0, 0);
+
+    if (utcHour >= 5 && utcHour < 23) {
+      // Session is over for today — show the most recently completed session
+      // Start was 23:00 UTC yesterday
       sessionStart.setUTCDate(sessionStart.getUTCDate() - 1);
+      sessionStart.setUTCHours(23, 0, 0, 0);
+    } else if (utcHour < 5) {
+      // We're inside tonight's session — start was 23:00 UTC yesterday
+      sessionStart.setUTCDate(sessionStart.getUTCDate() - 1);
+      sessionStart.setUTCHours(23, 0, 0, 0);
+    } else {
+      // utcHour === 23 — session is just starting now
+      sessionStart.setUTCHours(23, 0, 0, 0);
     }
 
     // Session end: 05:00 UTC (6am BST)
