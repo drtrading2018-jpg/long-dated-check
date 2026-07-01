@@ -1,5 +1,8 @@
 import { getIGSession, parseIGTime, toBSTLabel, NIKKEI_EPIC } from "../../lib/ig-auth";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export async function GET() {
   try {
     const { cst, token, baseUrl, apiKey } = await getIGSession();
@@ -49,6 +52,7 @@ export async function GET() {
     const url = `${baseUrl}/prices/${NIKKEI_EPIC}/MINUTE_30?startdate=${encodeURIComponent(fmt(sessionStart))}&enddate=${encodeURIComponent(fmt(sessionEnd))}`;
 
     const res = await fetch(url, {
+      cache: "no-store",
       headers: {
         "X-IG-API-KEY": apiKey,
         "CST": cst,

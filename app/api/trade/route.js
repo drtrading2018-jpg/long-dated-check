@@ -6,6 +6,9 @@ const LIMIT_DISTANCE = 500;
 const STAKE = 2; // £2 per point
 const ACCOUNT_ID = "Z67JKW"; // Spread bet demo account
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 // Calculate EMA for a series of prices
 function calculateEMA(prices, period) {
   if (prices.length < period) return null;
@@ -48,6 +51,7 @@ export async function GET(request) {
     const { cst, token, baseUrl, apiKey } = await getIGSession();
 
     const priceRes = await fetch(`${baseUrl}/prices/${NIKKEI_EPIC}/MINUTE_30/30`, {
+      cache: "no-store",
       headers: {
         "X-IG-API-KEY": apiKey,
         "CST": cst,

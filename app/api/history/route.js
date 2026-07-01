@@ -5,6 +5,9 @@ const STAKE = 2;         // £2 per point
 const STOP_PTS = 200;   // stop loss distance
 const LIMIT_PTS = 500;  // take profit distance
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 function backtestFromVerdict(verdict, candles) {
   // Only backtest if we have a real stored verdict
   if (!verdict || verdict === "uncertain") {
@@ -55,6 +58,7 @@ export async function GET() {
     const { cst, token, baseUrl, apiKey } = await getIGSession();
 
     const res = await fetch(`${baseUrl}/prices/${NIKKEI_EPIC}/MINUTE_30/500`, {
+      cache: "no-store",
       headers: {
         "X-IG-API-KEY": apiKey,
         "CST": cst,

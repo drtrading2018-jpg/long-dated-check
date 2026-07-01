@@ -1,3 +1,6 @@
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export async function GET() {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) {
@@ -8,9 +11,11 @@ export async function GET() {
 Their research shows the single biggest cause of unexpected moves is scheduled macro events (BOJ, Fed, major data) or breaking news (IPOs, geopolitical events) — not USD/JPY correlation, which they've ruled out as unreliable.
 Focus entirely on identifying anything that could override the normal technical pattern tonight.
 
+Run at most 3 searches total — one per topic below. Do not run follow-up or exploratory searches beyond those 3 unless a search genuinely fails.
+
 After you finish searching, your FINAL message must contain ONLY a single raw JSON object matching the structure requested — no markdown formatting, no code fences, no commentary before or after it.`;
 
-  const userPrompt = `Search the web and return this exact JSON structure (raw, no markdown):
+  const userPrompt = `Run exactly these 3 searches, then return this exact JSON structure (raw, no markdown):
 {
   "timestamp": "${new Date().toISOString()}",
   "verdict": "bullish" or "bearish" or "uncertain",
@@ -22,7 +27,9 @@ After you finish searching, your FINAL message must contain ONLY a single raw JS
   "watchouts": ["specific thing to monitor 1", "specific thing to monitor 2"]
 }
 
-Search for: latest S&P 500 close, economic events in the next 24 hours relevant to Japan/Asia/US markets (BOJ, Fed, major data releases), and any breaking news in the last 12 hours that could move Japanese equities (IPOs, geopolitical developments, trade news, major company news).`;
+1. Latest S&P 500 close.
+2. Economic events in the next 24 hours relevant to Japan/Asia/US markets (BOJ, Fed, major data releases).
+3. Breaking news in the last 12 hours that could move Japanese equities (IPOs, geopolitical developments, trade news, major company news).`;
 
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -35,7 +42,21 @@ Search for: latest S&P 500 close, economic events in the next 24 hours relevant 
       body: JSON.stringify({
         model: "claude-sonnet-4-5",
         max_tokens: 1500,
-        tools: [{ type: "web_search_20250305", name: "web_search" }],
+        tools: [{
+          type: "web_search_20250305",
+          name: "web_search",
+          max_uses: 5,
+          allowed_domains: [
+            "reuters.com",
+            "bloomberg.com",
+            "cnbc.com",
+            "investing.com",
+            "tradingeconomics.com",
+            "marketwatch.com",
+            "finance.yahoo.com",
+            "asia.nikkei.com",
+          ],
+        }],
         system: systemPrompt,
         messages: [{ role: "user", content: userPrompt }],
       }),
