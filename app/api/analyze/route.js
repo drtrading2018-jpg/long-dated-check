@@ -1,3 +1,5 @@
+import { kvGet, kvSet } from "../../lib/kv";
+
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
@@ -5,6 +7,16 @@ export async function GET() {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) {
     return Response.json({ error: "ANTHROPIC_API_KEY is not set on the server" }, { status: 500 });
+  }
+
+  // Same-day cache — avoid re-billing Anthropic if Analyse is hit more than once today
+  const today = new Date().toISOString().slice(0, 10);
+  const cacheKey = `nikkei:analyze:${today}`;
+  try {
+    const cached = await kvGet(cacheKey);
+    if (cached) return Response.json({ ...cached, cached: true });
+  } catch (_) {
+    // KV unavailable — fall through and run a fresh analysis rather than blocking
   }
 
   const systemPrompt = `You are a financial market analyst specialising in the Japan 225 (Nikkei) index. The user monitors the Nikkei 225 around the Tokyo open (1am UK BST / 9am JST) for a 500+ point directional move.
@@ -47,12 +59,10 @@ After you finish searching, your FINAL message must contain ONLY a single raw JS
           name: "web_search",
           max_uses: 5,
           allowed_domains: [
-            "reuters.com",
             "bloomberg.com",
             "cnbc.com",
             "investing.com",
             "tradingeconomics.com",
-            "marketwatch.com",
             "finance.yahoo.com",
             "asia.nikkei.com",
           ],
@@ -88,6 +98,7 @@ After you finish searching, your FINAL message must contain ONLY a single raw JS
     }
 
     const parsed = JSON.parse(clean.slice(firstBrace, endIdx + 1));
+    try { await kvSet(cacheKey, parsed); } catch (_) {} // Non-fatal if KV save fails
     return Response.json(parsed);
   } catch (err) {
     return Response.json({ error: err.message }, { status: 500 });

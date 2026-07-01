@@ -315,7 +315,7 @@ export default function NikkeiDashboard() {
                 </div>
               )}
 
-              <p style={s.ts}>Analysed {fmt(analysis.timestamp)}</p>
+              <p style={s.ts}>Analysed {fmt(analysis.timestamp)}{analysis.cached ? " · cached (already run today)" : ""}</p>
             </div>
           )}
 
@@ -599,7 +599,7 @@ export default function NikkeiDashboard() {
                 try {
                   const res = await fetch("/api/cron-analyze");
                   const data = await res.json();
-                  alert(data.error ? `Error: ${data.error}` : `Stored: ${data.verdict} (${data.confidence}) for ${data.sessionDate}`);
+                  alert(data.error ? `Error: ${data.error}` : `${data.cached ? "Already ran today (cached)" : "Stored"}: ${data.verdict} (${data.confidence}) for ${data.sessionDate}`);
                 } catch (err) {
                   alert(`Error: ${err.message}`);
                 }

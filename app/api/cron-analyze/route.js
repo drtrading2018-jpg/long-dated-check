@@ -10,6 +10,16 @@ export const revalidate = 0;
 export async function GET() {
   const sessionDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC date at 1am BST
 
+  // Already ran today — return the stored result instead of re-billing Anthropic
+  try {
+    const existing = await kvGet(`nikkei:session:${sessionDate}`);
+    if (existing) {
+      return Response.json({ ok: true, sessionDate, verdict: existing.verdict, confidence: existing.confidence, cached: true });
+    }
+  } catch (_) {
+    // KV unavailable — fall through and run a fresh analysis rather than blocking
+  }
+
   const systemPrompt = `You are a financial market analyst specialising in the Japan 225 (Nikkei) index. The user monitors the Nikkei 225 around the Tokyo open (1am UK BST / 9am JST) for a 500+ point directional move.
 Their research shows the single biggest cause of unexpected moves is scheduled macro events (BOJ, Fed, major data) or breaking news (IPOs, geopolitical events) — not USD/JPY correlation, which they've ruled out as unreliable.
 Focus entirely on identifying anything that could override the normal technical pattern tonight.
@@ -54,12 +64,10 @@ After you finish searching, your FINAL message must contain ONLY a single raw JS
           name: "web_search",
           max_uses: 5,
           allowed_domains: [
-            "reuters.com",
             "bloomberg.com",
             "cnbc.com",
             "investing.com",
             "tradingeconomics.com",
-            "marketwatch.com",
             "finance.yahoo.com",
             "asia.nikkei.com",
           ],
