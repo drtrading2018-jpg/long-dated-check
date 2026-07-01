@@ -9,9 +9,11 @@ export async function GET() {
     return Response.json({ error: "ANTHROPIC_API_KEY is not set on the server" }, { status: 500 });
   }
 
-  // Same-day cache — avoid re-billing Anthropic if Analyse is hit more than once today
-  const today = new Date().toISOString().slice(0, 10);
-  const cacheKey = `nikkei:analyze:${today}`;
+  // Share the same cache slot as the 1am cron — if tonight's/today's session
+  // has already been analysed (by the cron or an earlier manual click), just
+  // return that instead of paying for another Anthropic run.
+  const sessionDate = new Date().toISOString().slice(0, 10);
+  const cacheKey = `nikkei:session:${sessionDate}`;
   try {
     const cached = await kvGet(cacheKey);
     if (cached) return Response.json({ ...cached, cached: true });
@@ -98,7 +100,16 @@ After you finish searching, your FINAL message must contain ONLY a single raw JS
     }
 
     const parsed = JSON.parse(clean.slice(firstBrace, endIdx + 1));
-    try { await kvSet(cacheKey, parsed); } catch (_) {} // Non-fatal if KV save fails
+
+    // Non-fatal if KV save fails — store under the shared session key so this
+    // result is what both History and any later cron/manual check will see
+    try {
+      await kvSet(cacheKey, parsed);
+      const existingIndex = (await kvGet("nikkei:sessions:index")) || [];
+      const index = [sessionDate, ...existingIndex.filter((d) => d !== sessionDate)].slice(0, 90);
+      await kvSet("nikkei:sessions:index", index);
+    } catch (_) {}
+
     return Response.json(parsed);
   } catch (err) {
     return Response.json({ error: err.message }, { status: 500 });
