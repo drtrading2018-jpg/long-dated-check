@@ -8,30 +8,53 @@ const LIMIT_PTS = 500;  // take profit distance
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+// Rolling EMA over a chronological price series — returns an array the same
+// length as `closes`, with a value at index i only once `period` prior
+// closes are available (matches the live trade route's calculateEMA, but
+// keeps every intermediate value instead of just the final one).
+function computeRollingEMA(closes, period) {
+  const result = new Array(closes.length).fill(null);
+  if (closes.length < period) return result;
+  const k = 2 / (period + 1);
+  let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  result[period - 1] = ema;
+  for (let i = period; i < closes.length; i++) {
+    ema = closes[i] * k + ema * (1 - k);
+    result[i] = ema;
+  }
+  return result;
+}
+
+// Mirrors the exact 3-way confirmation /api/trade requires before placing a
+// real order (stored verdict + 1am->1:30am candle direction + price vs
+// EMA20) so this backtest reports on the strategy actually being traded,
+// not a looser "always follow the verdict" simulation.
 function backtestFromVerdict(verdict, candles) {
-  // Only backtest if we have a real stored verdict
   if (!verdict || verdict === "uncertain") {
     return { signal: "none", pnl: 0, exit: null, entry: null };
   }
 
-  const signal = verdict === "bullish" ? "BUY" : "SELL";
+  const oneAmCandle = candles.find(c => c.utcHour === 0 && c.utcMin === 0);
+  const oneThirtyCandle = candles.find(c => c.utcHour === 0 && c.utcMin === 30);
 
-  // Find 1:30am BST candle (00:30 UTC) as entry — closest match
-  function sortVal(c) {
-    return c.utcHour === 23 ? -1 : c.utcHour * 60 + c.utcMin;
-  }
-
-  const oneThirtyCandle = candles.reduce((best, c) => {
-    if (c.utcHour === 23) return best;
-    const diff = Math.abs(sortVal(c) - 30); // 30 = 00:30 UTC
-    const bestDiff = best ? Math.abs(sortVal(best) - 30) : Infinity;
-    return diff < bestDiff ? c : best;
-  }, null);
-
-  if (!oneThirtyCandle) {
+  if (!oneAmCandle || !oneThirtyCandle) {
     return { signal: "none", pnl: 0, exit: null, entry: null };
   }
 
+  const candleMove = oneThirtyCandle.close - oneAmCandle.close;
+  const candleDirection = candleMove > 30 ? "bullish" : candleMove < -30 ? "bearish" : "flat";
+  const priceVsEMA = oneThirtyCandle.ema20 != null
+    ? (oneThirtyCandle.close > oneThirtyCandle.ema20 ? "above" : "below")
+    : null;
+
+  const bullishSignal = verdict === "bullish" && candleDirection === "bullish" && priceVsEMA === "above";
+  const bearishSignal = verdict === "bearish" && candleDirection === "bearish" && priceVsEMA === "below";
+
+  if (!bullishSignal && !bearishSignal) {
+    return { signal: "none", pnl: 0, exit: null, entry: null };
+  }
+
+  const signal = bullishSignal ? "BUY" : "SELL";
   const entry = oneThirtyCandle.close;
   const stopLevel  = signal === "BUY" ? entry - STOP_PTS  : entry + STOP_PTS;
   const limitLevel = signal === "BUY" ? entry + LIMIT_PTS : entry - LIMIT_PTS;
@@ -80,41 +103,55 @@ export async function GET() {
       return Response.json({ error: "No price data returned from IG" }, { status: 502 });
     }
 
-    // Group candles by BST session date, storing close + high + low
+    // Parse into a flat, chronologically-sorted series first so EMA20 can be
+    // computed continuously (like a real indicator would be), rather than
+    // resetting at each session boundary.
+    const flat = prices
+      .map(p => {
+        try {
+          const closeBid = p?.closePrice?.bid;
+          const closeAsk = p?.closePrice?.ask;
+          if (closeBid == null || closeAsk == null) return null;
+
+          const d = parseIGTime(p.snapshotTime);
+          if (!d) return null;
+
+          return {
+            date: d,
+            utcHour: d.getUTCHours(),
+            utcMin: d.getUTCMinutes(),
+            close: (closeBid + closeAsk) / 2,
+            high: p.highPrice ? (p.highPrice.bid + p.highPrice.ask) / 2 : null,
+            low: p.lowPrice ? (p.lowPrice.bid + p.lowPrice.ask) / 2 : null,
+            label: toBSTLabel(d),
+          };
+        } catch (_) {
+          return null;
+        }
+      })
+      .filter(c => c !== null)
+      .sort((a, b) => a.date - b.date);
+
+    const emaSeries = computeRollingEMA(flat.map(c => c.close), 20);
+    flat.forEach((c, i) => { c.ema20 = emaSeries[i]; });
+
+    // Group candles by BST session date
     const bySession = {};
 
-    prices.forEach(p => {
-      try {
-        const closeBid = p?.closePrice?.bid;
-        const closeAsk = p?.closePrice?.ask;
-        if (closeBid == null || closeAsk == null) return;
+    flat.forEach(c => {
+      const { utcHour } = c;
+      let sessionDate;
+      if (utcHour === 23) {
+        const next = new Date(c.date.getTime() + 86400000);
+        sessionDate = next.toISOString().slice(0, 10);
+      } else if (utcHour < 7) {
+        sessionDate = c.date.toISOString().slice(0, 10);
+      } else {
+        return;
+      }
 
-        const d = parseIGTime(p.snapshotTime);
-        if (!d) return;
-
-        const utcHour = d.getUTCHours();
-        const utcMin  = d.getUTCMinutes();
-
-        let sessionDate;
-        if (utcHour === 23) {
-          const next = new Date(d.getTime() + 86400000);
-          sessionDate = next.toISOString().slice(0, 10);
-        } else if (utcHour < 7) {
-          sessionDate = d.toISOString().slice(0, 10);
-        } else {
-          return;
-        }
-
-        if (!bySession[sessionDate]) bySession[sessionDate] = [];
-        bySession[sessionDate].push({
-          utcHour,
-          utcMin,
-          close: (closeBid + closeAsk) / 2,
-          high:  p.highPrice  ? (p.highPrice.bid  + p.highPrice.ask)  / 2 : null,
-          low:   p.lowPrice   ? (p.lowPrice.bid   + p.lowPrice.ask)   / 2 : null,
-          label: toBSTLabel(d),
-        });
-      } catch (_) {}
+      if (!bySession[sessionDate]) bySession[sessionDate] = [];
+      bySession[sessionDate].push(c);
     });
 
     // Fetch stored analyses from Redis
@@ -175,7 +212,10 @@ export async function GET() {
     const wins     = withVerdicts.filter(s => s.backtest.exit === "limit");
     const losses   = withVerdicts.filter(s => s.backtest.exit === "stop");
     const openEnd  = withVerdicts.filter(s => s.backtest.exit === "open");
-    const skipped  = sessions.filter(s => s.analysis && s.analysis.verdict === "uncertain");
+    // "Skipped" = had a stored analysis but no trade was taken — either the
+    // verdict was uncertain, or the candle/EMA confirmation didn't align
+    // (same reasons the live /api/trade route would have skipped it too).
+    const skipped  = sessions.filter(s => s.analysis && s.backtest.signal === "none");
     const totalPnl = withVerdicts.reduce((sum, s) => sum + s.backtest.pnl, 0);
 
     const summary = {

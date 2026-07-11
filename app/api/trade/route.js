@@ -1,4 +1,4 @@
-import { kvSet, kvGet } from "../../lib/kv";
+import { kvSet, kvGet, kvSetNX, kvDel } from "../../lib/kv";
 import { getIGSession, parseIGTime, NIKKEI_EPIC } from "../../lib/ig-auth";
 
 const STOP_DISTANCE = 200;
@@ -135,80 +135,101 @@ export async function GET(request) {
     const direction = bullishSignal ? "BUY" : "SELL";
     log.push(`All conditions met — placing ${direction} trade`);
 
-    // 6. Place the trade
-    const tradeRes = await fetch(`${baseUrl}/positions/otc`, {
-      method: "POST",
-      headers: {
-        "X-IG-API-KEY": apiKey,
-        "CST": cst,
-        "X-SECURITY-TOKEN": token,
-        "IG-ACCOUNT-ID": ACCOUNT_ID,
-        "Content-Type": "application/json; charset=UTF-8",
-        "Accept": "application/json; charset=UTF-8",
-        "Version": "2",
-      },
-      body: JSON.stringify({
-        epic: NIKKEI_EPIC,
-        expiry: "DFB",
-        direction,
-        size: STAKE,
-        orderType: "MARKET",
-        timeInForce: "FILL_OR_KILL",
-        guaranteedStop: false,
-        stopDistance: STOP_DISTANCE,
-        limitDistance: LIMIT_DISTANCE,
-        forceOpen: true,
-        currencyCode: "GBP",
-      }),
-    });
-
-    const tradeBody = await tradeRes.json();
-    const dealRef = tradeBody.dealReference;
-
-    if (!dealRef) {
-      throw new Error(`Trade placement failed: ${JSON.stringify(tradeBody).slice(0, 200)}`);
+    // 5b. Claim today's trade slot atomically. If this fails, a trade for
+    // today's session has already been placed (or is being placed right now
+    // by an overlapping invocation) — refuse to place a second one.
+    const sessionDate = new Date().toISOString().slice(0, 10);
+    const tradeLockKey = `nikkei:trade:lock:${sessionDate}`;
+    const claimed = await kvSetNX(tradeLockKey, { direction, claimedAt: new Date().toISOString(), isManual });
+    if (!claimed) {
+      log.push("A trade for today's session has already been placed — refusing to place a duplicate");
+      return Response.json({ skipped: true, reason: "Trade already placed for today's session — duplicate execution prevented", log });
     }
 
-    log.push(`Deal reference: ${dealRef}`);
+    try {
+      // 6. Place the trade
+      const tradeRes = await fetch(`${baseUrl}/positions/otc`, {
+        method: "POST",
+        headers: {
+          "X-IG-API-KEY": apiKey,
+          "CST": cst,
+          "X-SECURITY-TOKEN": token,
+          "IG-ACCOUNT-ID": ACCOUNT_ID,
+          "Content-Type": "application/json; charset=UTF-8",
+          "Accept": "application/json; charset=UTF-8",
+          "Version": "2",
+        },
+        body: JSON.stringify({
+          epic: NIKKEI_EPIC,
+          expiry: "DFB",
+          direction,
+          size: STAKE,
+          orderType: "MARKET",
+          timeInForce: "FILL_OR_KILL",
+          guaranteedStop: false,
+          stopDistance: STOP_DISTANCE,
+          limitDistance: LIMIT_DISTANCE,
+          forceOpen: true,
+          currencyCode: "GBP",
+        }),
+      });
 
-    // 7. Confirm the trade
-    await new Promise(r => setTimeout(r, 1500)); // Wait 1.5s for IG to process
-    const confirmRes = await fetch(`${baseUrl}/confirms/${dealRef}`, {
-      headers: {
-        "X-IG-API-KEY": apiKey,
-        "CST": cst,
-        "X-SECURITY-TOKEN": token,
-        "IG-ACCOUNT-ID": ACCOUNT_ID,
-        "Accept": "application/json; charset=UTF-8",
-        "Version": "1",
-      },
-    });
+      const tradeBody = await tradeRes.json();
+      const dealRef = tradeBody.dealReference;
 
-    const confirm = await confirmRes.json();
-    log.push(`Deal status: ${confirm.dealStatus}, level: ${confirm.level}, stop: ${confirm.stopLevel}, limit: ${confirm.limitLevel}`);
+      if (!dealRef) {
+        throw new Error(`Trade placement failed: ${JSON.stringify(tradeBody).slice(0, 200)}`);
+      }
 
-    // 8. Store trade in log
-    const tradeRecord = {
-      timestamp: new Date().toISOString(),
-      direction,
-      verdict,
-      confidence,
-      candleMove: Math.round(candleMove),
-      ema20: ema20 ? Math.round(ema20) : null,
-      dealReference: dealRef,
-      dealId: confirm.dealId,
-      status: confirm.dealStatus,
-      entryLevel: confirm.level,
-      stopLevel: confirm.stopLevel,
-      limitLevel: confirm.limitLevel,
-      isManual,
-    };
+      log.push(`Deal reference: ${dealRef}`);
 
-    const existingRaw = await kvGet("nikkei:trade:log");
-    const existing = existingRaw ? (typeof existingRaw === "string" ? JSON.parse(existingRaw) : existingRaw) : [];
-    await kvSet("nikkei:trade:log", JSON.stringify([tradeRecord, ...existing].slice(0, 60)));
+      // 7. Confirm the trade
+      await new Promise(r => setTimeout(r, 1500)); // Wait 1.5s for IG to process
+      const confirmRes = await fetch(`${baseUrl}/confirms/${dealRef}`, {
+        headers: {
+          "X-IG-API-KEY": apiKey,
+          "CST": cst,
+          "X-SECURITY-TOKEN": token,
+          "IG-ACCOUNT-ID": ACCOUNT_ID,
+          "Accept": "application/json; charset=UTF-8",
+          "Version": "1",
+        },
+      });
 
-    return Response.json({ traded: true, direction, dealReference: dealRef, confirm, log });
+      const confirm = await confirmRes.json();
+      log.push(`Deal status: ${confirm.dealStatus}, level: ${confirm.level}, stop: ${confirm.stopLevel}, limit: ${confirm.limitLevel}`);
+
+      // 8. Store trade in log
+      const tradeRecord = {
+        timestamp: new Date().toISOString(),
+        direction,
+        verdict,
+        confidence,
+        candleMove: Math.round(candleMove),
+        ema20: ema20 ? Math.round(ema20) : null,
+        dealReference: dealRef,
+        dealId: confirm.dealId,
+        status: confirm.dealStatus,
+        entryLevel: confirm.level,
+        stopLevel: confirm.stopLevel,
+        limitLevel: confirm.limitLevel,
+        isManual,
+      };
+
+      const existingRaw = await kvGet("nikkei:trade:log");
+      const existing = existingRaw ? (typeof existingRaw === "string" ? JSON.parse(existingRaw) : existingRaw) : [];
+      await kvSet("nikkei:trade:log", JSON.stringify([tradeRecord, ...existing].slice(0, 60)));
+
+      // Record the outcome on the lock so it's visible for debugging later
+      try { await kvSet(tradeLockKey, { direction, dealReference: dealRef, claimedAt: new Date().toISOString(), isManual }); } catch (_) {}
+
+      return Response.json({ traded: true, direction, dealReference: dealRef, confirm, log });
+    } catch (placementErr) {
+      // Placement failed before completing — release the lock so a genuine
+      // retry isn't permanently blocked for the rest of the day
+      try { await kvDel(tradeLockKey); } catch (_) {}
+      throw placementErr;
+    }
   } catch (err) {
     return Response.json({ error: err.message, log }, { status: 500 });
   }

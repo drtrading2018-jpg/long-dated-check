@@ -32,3 +32,16 @@ export async function kvGet(key) {
   try { return JSON.parse(result); }
   catch (_) { return result; }
 }
+
+// Atomic "claim this key or fail" — used to guard against a real-world action
+// (like placing a trade) happening twice if a route somehow gets invoked more
+// than once. Returns true if this call claimed the key, false if it was
+// already claimed by an earlier call.
+export async function kvSetNX(key, value) {
+  const result = await upstash("SET", key, typeof value === "string" ? value : JSON.stringify(value), "NX");
+  return result === "OK";
+}
+
+export async function kvDel(key) {
+  return upstash("DEL", key);
+}
